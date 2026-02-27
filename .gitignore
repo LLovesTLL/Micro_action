@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyTorch
+*.pth
+*.pt
+*.pkl
+
+# VS Code
+.vscode/
+
+# Dataset & Weights (忽略大文件)
+datasets/train/
+datasets/val/
+datasets/*.zip
+*.mp4
+*.avi
+pretrained_models/
+exp/
+output/
+!exp/action/*.sh
+!exp/action/*.ps1
+!exp/action/*.md
+
+# C++ build files
+build/
