@@ -77,3 +77,43 @@ ProjectRoot/
 │       └── ... (训练日志和输出模型将生成在这里)
 └── ...
 ```
+
+## 6. 版本控制与 GitHub 推送指南
+**日期**: 2026年2月27日 (新增)
+**仓库地址**: `https://github.com/LLovesTLL/Micro_action.git`
+
+### A. 配置 .gitignore
+为避免上传大文件 (视频、权重、数据集)，已配置 `.gitignore`。
+*   **忽略文件**: `*.mp4`, `datasets/`, `pretrained_models/`, `output/`, `*.pth` 等。
+*   **保留文件**: 核心代码、脚本 (`exp/action/*.sh`, `*.ps1`)、文档。
+
+### B. 推送流程 (处理大文件被误添加的情况)
+如果在 `git add` 之前已有大文件被误添加进历史记录，导致 push 失败 (100MB 限制)，请按以下步骤彻底重置：
+
+1.  **删除 .git 文件夹** (清除所有历史包袱):
+    ```powershell
+    Remove-Item -Recurse -Force .git
+    ```
+2.  **重新初始化 Git**:
+    ```powershell
+    git init
+    ```
+3.  **确保 .gitignore 生效**:
+    (确认目录下有 .gitignore 文件)
+4.  **重新添加与提交**:
+    ```powershell
+    git add .
+    git commit -m "Initial commit for VideoMambaPro"
+    ```
+5.  **重命名主分支**:
+    ```powershell
+    git branch -M main
+    ```
+6.  **关联远程仓库**:
+    ```powershell
+    git remote add origin https://github.com/LLovesTLL/Micro_action.git
+    ```
+7.  **强制推送**:
+    ```powershell
+    git push -u origin main --force
+    ```
