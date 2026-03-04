@@ -412,9 +412,13 @@ def videomamba_tiny(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
     if pretrained:
         print('load pretrained weights')
-        state_dict = torch.load(_MODELS["videomamba_t16_in1k"], map_location='cpu')
+        state_dict = torch.load(_MODELS["videomambapro_t16_in1k"], map_location='cpu')
         load_state_dict(model, state_dict, center=True)
     return model
+
+@register_model
+def videomambapro_t16_in1k(pretrained=False, **kwargs):
+    return videomamba_tiny(pretrained=pretrained, **kwargs)
 
 
 @register_model
@@ -431,9 +435,13 @@ def videomamba_small(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
     if pretrained:
         print('load pretrained weights')
-        state_dict = torch.load(_MODELS["videomamba_s16_in1k"], map_location='cpu')
+        state_dict = torch.load(_MODELS["videomambapro_s16_in1k"], map_location='cpu')
         load_state_dict(model, state_dict, center=True)
     return model
+
+@register_model
+def videomambapro_s16_in1k(pretrained=False, **kwargs):
+    return videomamba_small(pretrained=pretrained, **kwargs)
 
 
 @register_model
@@ -450,9 +458,13 @@ def videomamba_middle(pretrained=False, **kwargs):
     model.default_cfg = _cfg()
     if pretrained:
         print('load pretrained weights')
-        state_dict = torch.load(_MODELS["videomamba_m16_in1k"], map_location='cpu')
+        state_dict = torch.load(_MODELS["videomambapro_m16_in1k"], map_location='cpu')
         load_state_dict(model, state_dict, center=True)
     return model
+
+@register_model
+def videomambapro_m16_in1k(pretrained=False, **kwargs):
+    return videomamba_middle(pretrained=pretrained, **kwargs)
 
 
 if __name__ == '__main__':

@@ -37,9 +37,8 @@ datasets/*.zip
 pretrained_models/
 exp/
 output/
-!exp/action/*.sh
-!exp/action/*.ps1
-!exp/action/*.md
+!exp/*.sh
+!exp/**/*.sh
 
 # C++ build files
 build/

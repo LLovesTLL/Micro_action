@@ -446,18 +446,21 @@ def main(args, ds_init):
                 checkpoint_model['pos_embed'] = new_pos_embed
             
             # we use 8 frames for pretraining
-            temporal_pos_embed = checkpoint_model['temporal_pos_embedding']
-            orig_t_size = args.orig_t_size // model.patch_embed.tubelet_size
-            new_t_size = args.num_frames // model.patch_embed.tubelet_size
-            # height (== width) for the checkpoint position embedding
-            if orig_t_size != new_t_size:
-                print(f"Temporal interpolate from {orig_t_size} to {new_t_size}")
-                temporal_pos_embed = temporal_pos_embed.permute(0, 2, 1)
-                temporal_pos_embed = torch.nn.functional.interpolate(
-                    temporal_pos_embed, size=(new_t_size,), mode='linear', align_corners=False
-                )
-                temporal_pos_embed = temporal_pos_embed.permute(0, 2, 1)
-                checkpoint_model['temporal_pos_embedding'] = temporal_pos_embed
+            if 'temporal_pos_embedding' in checkpoint_model:
+                temporal_pos_embed = checkpoint_model['temporal_pos_embedding']
+                orig_t_size = args.orig_t_size // model.patch_embed.tubelet_size
+                new_t_size = args.num_frames // model.patch_embed.tubelet_size
+                # height (== width) for the checkpoint position embedding
+                if orig_t_size != new_t_size:
+                    print(f"Temporal interpolate from {orig_t_size} to {new_t_size}")
+                    temporal_pos_embed = temporal_pos_embed.permute(0, 2, 1)
+                    temporal_pos_embed = torch.nn.functional.interpolate(
+                        temporal_pos_embed, size=(new_t_size,), mode='linear', align_corners=False
+                    )
+                    temporal_pos_embed = temporal_pos_embed.permute(0, 2, 1)
+                    checkpoint_model['temporal_pos_embedding'] = temporal_pos_embed
+            else:
+                print("Warning: temporal_pos_embedding not found in checkpoint")
 
         elif 'pos_embed' in checkpoint_model:
             pos_embed_checkpoint = checkpoint_model['pos_embed']
@@ -500,7 +503,29 @@ def main(args, ds_init):
                 new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
                 checkpoint_model['pos_embed'] = new_pos_embed
 
-        utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
+        # 手动实现 patch_embed 权重的膨胀 (Inflation)
+        # 处理 ImageNet (2D) 权重到 Video (3D) 权重的转换
+        if 'patch_embed.proj.weight' in checkpoint_model:
+            weight_2d = checkpoint_model['patch_embed.proj.weight']
+            # 检查当前模型的 patch_embed 权重形状
+            if hasattr(model, 'patch_embed') and hasattr(model.patch_embed, 'proj'):
+                weight_3d_target_shape = model.patch_embed.proj.weight.shape
+                
+                # 如果 checkpoint 是 2D (C_out, C_in, H, W) 而模型是 3D (C_out, C_in, T, H, W)
+                if len(weight_2d.shape) == 4 and len(weight_3d_target_shape) == 5:
+                    print(f"Inflating patch_embed.proj.weight from {weight_2d.shape} to {weight_3d_target_shape}")
+                    # 获取时间维度 T
+                    time_dim = weight_3d_target_shape[2]
+                    # 执行中心帧初始化 (Center Frame Initialization)
+                    weight_3d = torch.zeros(weight_3d_target_shape)
+                    # 将 2D 权重放置在时间维度的中间位置
+                    weight_3d[:, :, time_dim // 2, :, :] = weight_2d
+                    # 更新 checkpoint
+                    checkpoint_model['patch_embed.proj.weight'] = weight_3d
+                elif weight_2d.shape != weight_3d_target_shape:
+                    print(f"Warning: patch_embed.proj.weight shape mismatch: {weight_2d.shape} vs {weight_3d_target_shape}")
+
+        utils.load_state_dict(model, checkpoint_model, prefix=args.model_key)
 
     model.to(device)
 
