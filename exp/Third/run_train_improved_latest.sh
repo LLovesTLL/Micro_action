@@ -35,18 +35,14 @@ echo "Output Dir: $SCRIPT_DIR"
 
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
-# 改进点:
-# 1. sampling_rate 4 -> 2: 提高时间分辨率，捕捉更快的微动作
-# 2. auto_augment (aa) 减弱: rand-m7-n4 -> rand-m5-n2. 微动作对空间变换敏感.
-# 3. mixup/cutmix 禁用: 微动作需要保持纹理和局部特征，强力混合可能损坏特征.
-# 4. epochs 50: 保持.
-# 5. drop 0.1: 增加一点 dropout 防止过拟合 (数据量少时)
-
 # 运行微调脚本 (使用 torchrun 启动多卡训练)
-# --nproc_per_node=4: 使用 4 张 GPU
+# --nproc_per_node=3: 使用 3 张 GPU
 # 如果单卡，请改为 --nproc_per_node=1
 
-torchrun --nproc_per_node=4 run_class_finetuning.py \
+# 使用 GPU 1, 2, 3
+export CUDA_VISIBLE_DEVICES=1,2,3
+
+torchrun --nproc_per_node=3 run_class_finetuning.py \
     --model videomambapro_t16_in1k \
     --data_path "../datasets" \
     --data_set MyCustomDataset \

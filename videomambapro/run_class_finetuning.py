@@ -3,6 +3,7 @@ import datetime
 import numpy as np
 import time
 import torch
+import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import json
 import os
@@ -504,7 +505,8 @@ def main(args, ds_init):
                 checkpoint_model['pos_embed'] = new_pos_embed
 
         # 手动实现 patch_embed 权重的膨胀 (Inflation)
-        # 处理 ImageNet (2D) 权重到 Video (3D) 权重的转换
+        # 策略更新：使用 Mean Inflation 替代 Center Frame Initialization
+        # 理由：让初始梯度能流向所有时间帧，避免 Frame 0 被忽略
         if 'patch_embed.proj.weight' in checkpoint_model:
             weight_2d = checkpoint_model['patch_embed.proj.weight']
             # 检查当前模型的 patch_embed 权重形状
@@ -513,19 +515,31 @@ def main(args, ds_init):
                 
                 # 如果 checkpoint 是 2D (C_out, C_in, H, W) 而模型是 3D (C_out, C_in, T, H, W)
                 if len(weight_2d.shape) == 4 and len(weight_3d_target_shape) == 5:
-                    print(f"Inflating patch_embed.proj.weight from {weight_2d.shape} to {weight_3d_target_shape}")
+                    print(f"Inflating patch_embed.proj.weight from {weight_2d.shape} to {weight_3d_target_shape} using Mean Inflation")
                     # 获取时间维度 T
                     time_dim = weight_3d_target_shape[2]
-                    # 执行中心帧初始化 (Center Frame Initialization)
-                    weight_3d = torch.zeros(weight_3d_target_shape)
-                    # 将 2D 权重放置在时间维度的中间位置
-                    weight_3d[:, :, time_dim // 2, :, :] = weight_2d
+                    
+                    # 执行均值膨胀 (Mean Inflation)
+                    # 将 2D 权重复制到时间维度，并归一化
+                    weight_3d = weight_2d.unsqueeze(2).repeat(1, 1, time_dim, 1, 1) / time_dim
+                    
                     # 更新 checkpoint
                     checkpoint_model['patch_embed.proj.weight'] = weight_3d
                 elif weight_2d.shape != weight_3d_target_shape:
                     print(f"Warning: patch_embed.proj.weight shape mismatch: {weight_2d.shape} vs {weight_3d_target_shape}")
 
-        utils.load_state_dict(model, checkpoint_model, prefix=args.model_key)
+        # 强制初始化 temporal_pos_embedding，防止全0初始化
+        # 注意：如果 checkpoint 里没有 temporal_pos_embedding，它默认是全0的 (nn.Parameter(torch.zeros))
+        # 我们在这里给它一个正态分布初始化，帮助打破对称性
+        if 'temporal_pos_embedding' not in checkpoint_model and hasattr(model, 'temporal_pos_embedding'):
+             print("Initializing temporal_pos_embedding with trunc_normal_")
+             nn.init.trunc_normal_(model.temporal_pos_embedding, std=0.02)
+
+        # Warning: passing prefix=args.model_key (e.g. 'model|module') causes load_state_dict to prepend 
+        # that prefix to all model keys (e.g. 'model|modulecls_token').
+        # Since checkpoint keys are clean (e.g. 'cls_token'), this results in 100% mismatch.
+        # We must set prefix='' to match the cleaned checkpoint keys.
+        utils.load_state_dict(model, checkpoint_model, prefix='')
 
     model.to(device)
 

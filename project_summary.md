@@ -295,7 +295,7 @@ ProjectRoot/
 **1. 新建脚本**: `exp/experiments/run_train_improved.sh`
 
 **2. 核心代码修复 (Critical Fix) - 手动膨胀 (`run_class_finetuning.py`)**:
-*   **问题**: VideoMambaPro 第一层 (`patch_embed`) 权重 (3D) 与 ImageNet 预训练权重 (2D) 维度不匹配 `[192, 3, 2, 16, 16] vs [192, 3, 16, 16]`，导致该层**被随机初始化**。这使得模型在训练初期丧失了所有视觉特征提取能力，严重拖慢收敛。
+*   **问题**: VideoMambaPro 第一层 (`patch_embed`) 权重 (3D) 与 ImageNet 预训练权重 (2D) 维度不匹配 `[192, 3, 2, 16, 16] vs [192, 3, 16, 16]`，导致该层**被随机初始化**。这使得模型在训练初期丧失了所有视觉特征提取能力，严重拖慢了收敛。
 *   **修复**: 在权重加载逻辑中增加了**手动膨胀 (Manual Inflation)** 代码。
     *   **实现**: 将 2D 卷积核复制到 3D 卷积核的中间帧 (Center Frame Initialization)，其余时间步置零。这确保模型在 Epoch 0 即拥有 ImageNet 级别的空间特征提取能力。
 
@@ -342,12 +342,54 @@ ProjectRoot/
     2.  **模型过小 (Tiny)**: 7M 参数对于微动作（Micro-action）这种细微且复杂的时空模式可能确实不够用，难以捕捉特征。
     3.  **优化器设置**: 当前的学习率或 Weight Decay 可能不适合经过手动膨胀后的参数分布。
 
-#### E. 下一步计划 (Action Plan)
+### 📅 2026年3月5日
+**任务**: 针对模型坍塌 (Acc 11.47%) 的深度调试与修复
 
-**1. 模型升级策略 (Scale Up)**
-*   **决策**: 尝试切换到更大的模型变体 (**VideoMamba-Middle** 或 **Small**)。
-*   **理由**: 
-    *   Tiny (7M) 可能受限于表达能力，无法在 52 个细粒度类别中找到区分面。
-    *   更大的模型通常有更稳定的 loss landscape，可能缓解优化困难。
-    *   **注意**: 必须下载对应的 ImageNet 预训练权重 (`videomambapro_m16_in1k...pth`)。
+#### A. 关键故障排查 (The Smoking Gun)
+经过详细的代码审查，发现导致上一轮实验失败（模型不收敛、Loss不降、准确率锁死）的**根本原因**并非模型容量不足或手动膨胀策略失效，而是**严重的权重加载配置错误**。
+
+1.  **权重加载前缀错误 (Prefix Bug)**
+    *   **问题**: `run_class_finetuning.py` 在调用 `utils.load_state_dict` 时传入了 `prefix=args.model_key` (默认 `'model|module'`)。
+    *   **后果**: 函数试图在 Checkpoint 的键名前加上前缀（例如将 `patch_embed` 变成 `modelpatch_embed`）去匹配模型。由于预训练权重的键名是干净的，导致**所有核心权重加载失败**。
+    *   **结论**: 上一轮训练的模型实际上是**完全随机初始化**的（除了我们在最后手动膨胀的那一层），根本没有继承 ImageNet 的视觉特征。这完美解释了为何 Loss 极高且不下降。
+    *   **修复**: 将 `prefix` 参数设为 `''` (空字符串)，确保键名精确匹配。
+
+2.  **膨胀策略改进 (Refined Inflation)**
+    *   **调整**: 从 "中心帧初始化" (Center Frame) 切换为 **"均值膨胀" (Mean Inflation)**。
+    *   **操作**: `weight_3d = weight_2d.unsqueeze(2).repeat(1, 1, time_dim, 1, 1) / time_dim`
+    *   **理由**: 将 2D 权重平均分配到所有时间帧。理论上，这能保证在 Epoch 0 时，梯度能流向所有时间步，避免过于剧烈的时间特征跳跃，使优化过程更平滑。
+
+#### B. 训练环境与配置升级 (Experiment v3)
+
+**1. 运行环境修复**
+*   **清理显存僵尸进程**: 发现 GPU 0 存在僵尸进程占用 10GB 显存，导致 OOM。通过 `kill -9` 清理释放。
+*   **优化 DDP**: 关闭 `find_unused_parameters=True` 检查，提升训练效率。
+
+**2. 超参数微调**
+*   **Batch Size**: `16` (4 GPUs x 4 samples/GPU)。
+*   **Learning Rate**: `2e-4` (在修复权重加载后，模型不再是从零开始，因此使用较小的学习率防止破坏预训练特征)。
+*   **Layer Decay**: `0.9` (增强正则化，防止过拟合)。
+*   **Epochs**: `70`。
+
+#### C. 实验结果分析 (Failed - Constant Prediction)
+*   **状态**: 训练停止（确认失败）。
+*   **关键数据**:
+    *   **Val Acc**: 在 **11.47%** (奇数Epoch) 和 **10.65%** (偶数Epoch) 两个数值间精确跳变。
+    *   **Train Loss**: 停滞在 3.53 左右，未见明显下降。
+*   **深度诊断 (僵尸模型现象)**:
+    *   经统计，验证集中 **Label 9 (nodding)** 占比恰好为 **11.47%** (641/5586)。
+    *   验证集中 **Label 10** 占比恰好为 **10.65%** (595/5586)。
+    *   **结论**: 模型陷入了**常数预测陷阱 (Constant Prediction Trap)**。它完全忽略了输入视频，只是在每一轮盲猜数据集中占比最大的类别。
+    *   **根本原因**: **Layer Decay (0.9)** 是罪魁祸首。由于 `Patch Embed` 层是手动膨胀的（非完美初始化），它急需大幅度更新来适应 3D 数据。但 Layer Decay 将其学习率压制到极低 ($2e^{-4} \times 0.9^{24} \approx 1.6e^{-5}$)，导致底层特征无法学习，上层网络随之瘫痪。
+
+#### D. 后续改进方案 (Experiment v4 - Aggressive Strategy)
+针对“僵尸模型”现象，制定了激进的唤醒策略。
+
+*   **脚本**: `exp/Fourth/run_train_aggressive.sh`
+*   **核心策略调整**:
+    1.  **🚀 禁用 Layer Decay (`--layer_decay 1.0`)**: **关键修复**。解除对底层的限制，让 `Patch Embed` 和 Backbone 享受全额学习率，快速完成从 2D 到 3D 的特征迁移。
+    2.  **⚡ 增大初始 LR (`2e-4` -> `1e-3`)**: 提升 5 倍学习率，提供强劲的梯度动力打破鞍点。
+    3.  **📈 梯度累积 (`--update_freq 4`)**: 在显存受限情况下，通过累计梯度模拟 Batch Size = 64 (16*4)，稳定优化方向，减少梯度噪声。
+    4.  **🔥 缩短预热 (`--warmup_epochs 2`)**: 快速通过预热期，尽早进入强优化阶段。
+*   **预期目标**: 前 5 个 Epoch 内 Train Loss 必须跌破 3.0，Val Acc 必须打破 11.47% 的魔咒。
 
