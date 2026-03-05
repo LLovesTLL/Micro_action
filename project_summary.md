@@ -320,8 +320,34 @@ ProjectRoot/
     *   通过修复 **Patch Embed 膨胀** 问题，我们已经让 VideoMambaPro 成功继承了 ImageNet 强大的空间特征。
     *   相比于强行适配不兼容的 K400 权重，使用“**ImageNet 空间底座 + 快速时序适应**”的策略更稳健，且避免了不可控的架构冲突bug。
 
-#### D. 下一步计划
-*   运行 `exp/experiments/run_train_improved.sh` (已包含权重膨胀修复)。
-*   监控验证集准确率，预期前几个 Epoch 的性能将显著优于第一次实验 (不再是随机猜测)。
-*   对比 "High Augmentation (前次实验)" 与 "Low Augmentation + Dense Sampling (本次改进)" 的性能差异。
+#### D. 实验结果分析 (2026年3月4日 - 3月5日)
+
+**1. 实验结果数据 (Based on log.txt)**
+*   **训练配置**: `VideoMambaPro_Tiny` (7M params), `Manual Inflation`, `Sampling Rate=2`.
+*   **状态**: 训练约 37 个 Epoch。
+*   **关键指标**:
+    *   **Train Loss**: 初始 ~3.61 -> 最终 ~3.51 (几乎未下降，严重欠拟合)。
+    *   **Val Loss**: 初始 ~3.45 -> 最终 ~3.41。
+    *   **Val Top-1 Acc**: 长期僵持在 **11.47%** (例如 Epoch 0, 1, 3, 5, 8-12, 14, 16, 18-22... 数值完全一致)。
+    *   **Val Top-5 Acc**: 约 39%。
+
+**2. 结果深度分析 (Failure Analysis)**
+*   **现象解读**:
+    *   **模型坍塌 (Model Collapse)**: 验证集准确率在几十个 Epoch 中精确维持在 `11.471009...%` 不变。这意味着模型**放弃了学习特征**，转而对所有样本输出相同的预测结果（通常是训练集中出现频率最高的类别，或者某几个类别的固定分布）。
+    *   **梯度爆炸 (Gradient Explosion)**: 这一点非常关键。日志中多次出现 `train_grad_norm: Infinity` (如 Epoch 8, 20, 31)，且 `loss_scale` 频繁波动。这表明手动膨胀后的权重或目前的学习率配置导致了数值不稳定，梯度难以有效传播。
+    *   **欠拟合 (Underfitting)**: 训练 Loss 几乎没有下降 (3.6 -> 3.5)，说明模型甚至没有学会“死记硬背”训练数据。对于 7M 参数的模型，这通常不是容量问题，而是优化问题。
+
+*   **可能原因**:
+    1.  **手动膨胀 (Manual Inflation) 隐患**: 如果膨胀逻辑实现有误（例如导致某些权重极大或极小），会直接引发梯度爆炸。
+    2.  **模型过小 (Tiny)**: 7M 参数对于微动作（Micro-action）这种细微且复杂的时空模式可能确实不够用，难以捕捉特征。
+    3.  **优化器设置**: 当前的学习率或 Weight Decay 可能不适合经过手动膨胀后的参数分布。
+
+#### E. 下一步计划 (Action Plan)
+
+**1. 模型升级策略 (Scale Up)**
+*   **决策**: 尝试切换到更大的模型变体 (**VideoMamba-Middle** 或 **Small**)。
+*   **理由**: 
+    *   Tiny (7M) 可能受限于表达能力，无法在 52 个细粒度类别中找到区分面。
+    *   更大的模型通常有更稳定的 loss landscape，可能缓解优化困难。
+    *   **注意**: 必须下载对应的 ImageNet 预训练权重 (`videomambapro_m16_in1k...pth`)。
 

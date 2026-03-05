@@ -35,8 +35,9 @@ datasets/*.zip
 *.mp4
 *.avi
 pretrained_models/
-exp/
-output/
+
+# Experiments (保留脚本，忽略日志和模型)
+exp/*
 !exp/*.sh
 !exp/**/*.sh
 
