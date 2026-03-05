@@ -60,7 +60,7 @@ torchrun --nproc_per_node=4 run_class_finetuning.py \
     --opt adamw \
     --lr 5e-4 \
     --drop_path 0.1 \
-    --head_drop_rate 0.0 \
+    --fc_drop_rate 0.0 \
     --layer_decay 0.8 \
     --opt_betas 0.9 0.999 \
     --warmup_epochs 2 \
