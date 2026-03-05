@@ -35,11 +35,11 @@ echo "Output Dir: $SCRIPT_DIR"
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
 # 运行微调脚本 (使用 torchrun 启动多卡训练)
-# --nproc_per_node=3: 使用 3 张 GPU
+# --nproc_per_node=2: 使用 2 张 GPU
 # 如果单卡，请改为 --nproc_per_node=1
 
-# 使用 GPU 1, 2, 3 (与上一轮保持一致)
-export CUDA_VISIBLE_DEVICES=1,2,3
+# 使用 GPU  1, 2 (与上一轮保持一致)
+export CUDA_VISIBLE_DEVICES=1,2
 
 # 关键改动：
 # 1. layer_decay 1.0: 防止底层（Patch Embed）学习率过低，让手动膨胀后的层能快速更新
@@ -47,7 +47,7 @@ export CUDA_VISIBLE_DEVICES=1,2,3
 # 3. update_freq 4: 累计梯度，模拟更大的 Batch Size (16*3*4 = 192 samples/step)，梯度的方向更准
 # 4. warmup_epochs 2: 快速预热
 
-torchrun --nproc_per_node=3 run_class_finetuning.py \
+torchrun --nproc_per_node=2 run_class_finetuning.py \
     --model videomambapro_t16_in1k \
     --data_path "../datasets" \
     --data_set MyCustomDataset \
