@@ -374,7 +374,7 @@ ProjectRoot/
 #### C. 实验结果分析 (Failed - Constant Prediction)
 *   **状态**: 训练停止（确认失败）。
 *   **关键数据**:
-    *   **Val Acc**: 在 **11.47%** (奇数Epoch) 和 **10.65%** (偶数Epoch) 两个数值间精确跳变。
+    *   **Val Acc**: 在 **11.47%** (奇数 Epoch) 和 **10.65%** (偶数 Epoch) 两个数值间精确跳变。
     *   **Train Loss**: 停滞在 3.53 左右，未见明显下降。
 *   **深度诊断 (僵尸模型现象)**:
     *   经统计，验证集中 **Label 9 (nodding)** 占比恰好为 **11.47%** (641/5586)。
@@ -435,4 +435,57 @@ ProjectRoot/
     *   **Sampling Rate**: 保持 `2` (高频采样)，确保不漏掉瞬时动作。
 
 **预期**: 如果模型前几个 Epoch 的验证准确率能**突破 12%** 并持续上升，即证明模型已被唤醒。
+
+#### D. Experiment 5 结果复盘：依然是“僵尸模型”
+虽然环境修复完毕，但 Experiment 5 的训练结果显示本次尝试**依然失败**。
+
+**1. 现象分析 (The Zombie Pattern)**
+*   **Val Acc 心电图**: 准确率在 **11.47%** (奇数 Epoch，全猜 Label 9) 和 **10.65%** (偶数 Epoch，全猜 Label 10) 之间精准跳动。
+*   **Train Acc 极低**: 训练集准确率仅为 11% 左右，模型处于完全欠拟合状态。
+*   **梯度消失**: `train_grad_norm` 降至 0.6 左右，说明网络参数几乎停止更新。
+
+**2. 深度归因 (Deep Dive)**
+既然去除了所有数据增强（No Augmentation）仍无法拟合，问题大概率出在**模型初始化的连通性**上。
+*   **嫌疑目标**: `patch_embed` 的手动膨胀 (Inflation) 逻辑。
+*   **假说**: 上一轮尝试的 **Mean Inflation** 将 2D 权重除以时间维度 $T$，导致输出特征的方差被大幅压缩。经过 LayerNorm 后数值过小，引发梯度消失，使得第一层卷积变成了“特征阻断器”。
+
+#### E. 进一步修改方案：回归中心帧膨胀 (Center Frame Inflation)
+为了修复特征提取源头的初始化问题，采取以下措施：
+
+1.  **修改代码逻辑 (`run_class_finetuning.py`)**:
+    *   **回滚**: 放弃 Mean Inflation，改回 **Center Frame Initialization**。
+    *   **操作**: `weight_3d` 初始化为全 0，仅在中心时间帧 (`T//2`) 放入原始 ImageNet 2D 权重。
+    *   **原理**: 这样初始化的 3D 卷积核在时间维度上是恒等变换 (Identity)。对于静态图像或视频，其输出在数学上完全等价于原始 2D 模型。这保证了 Trainer 在 Epoch 0 看到的是一个**完全正常、性能强劲的 ImageNet 模型**，而不是一个被均值模糊过的未知模型。
+
+2.  **验证计划**:
+    *   清理旧日志，再次运行 `run_train_noaug.sh`。
+    *   如果前 3 个 Epoch 的 Val Acc 能脱离 11.47%，则判定故障排除。
+
+#### F. 第六次实验 (Experiment 6): 攻克 "11.47% 诅咒" (Weighted Loss & Bug Fixes)
+
+**1. 问题诊断 (Diagnosis)**
+*   **现象**: 模型在此前的实验中始终停留在 ~11.47% 的验证集准确率，这精确对应于多数类 (Class 9) 的频率。
+*   **原因排查**:
+    *   **类别极度不平衡 (Class Imbalance)**: 多数类 (Class 9) 样本数 1283，而少数类 (Class 45) 仅 6 个。模型发现直接预测多数类是降低全局 Loss 的捷径 (Posterior Collapse)。
+    *   **验证集采样 Bug**: 发现 `datasets/kinetics.py` 中的验证集采样逻辑导致只取到了视频的第一帧（可能是黑屏或无效帧），使得验证结果完全随机。
+    *   **Effective LR 过高**: `num_sample=2` 实际上使 Batch Size 和 Effective LR 翻倍，导致优化过激，破坏了预训练权重。
+
+**2. 解决方案 (Comprehensive Fixes)**
+针对上述问题，在 **Experiment 6** 中实施了全方位的修复：
+
+*   **策略一：类别加权损失 (Class-Balanced Loss)**
+    *   **实现**: 在 `run_class_finetuning.py` 中手动实现了 **Square Root Inverse Frequency** (平方根逆频率) 加权。
+    *   **公式**: $w_i = \sqrt{N_{total} / N_i}$。
+    *   **优势**: 相比直接逆频率 ($1/N_i$)，平方根法更温和。它既惩罚了忽略少数类的行为，又避免了因少数类权重过大导致的梯度爆炸。
+    *   **触发**: 当检测到 `--smoothing 0.0` 且 `--mixup 0.0` 时自动激活。
+*   **策略二：代码级修复 (Critical Bug Fixes)**
+    *   **采样逻辑**: 修复 `datasets/kinetics.py`，确保验证集能像训练集一样均匀采样视频帧，而不是只取第一帧。
+    *   **依赖缺失**: 修复 `datasets/video_transforms.py` 和 `run_class_finetuning.py` (缺失 `import math`) 的报错。
+*   **策略三：保守的超参数**
+    *   **LR**: `1e-4` (降低学习率)。
+    *   **No Augmentation**: 禁用 Mixup/Cutmix，确保模型看到真实的像素，让加权 Loss 准确计算。
+
+**3. 实验预期**
+*   **标志**: 训练日志中必须出现 `Activated Weighted CrossEntropyLoss!` 以及具体的类别权重（如 Class 45 权重应显著大于 Class 9）。
+*   **目标**: 验证集 Acc 必须突破 11.47% 的多数类基准线。
 

@@ -14,7 +14,14 @@ import numbers
 import PIL
 import torchvision
 
-import functional as FF
+try:
+    from videomambapro import functional as FF
+except ImportError:
+    try:
+        import functional as FF
+    except ImportError:
+         print("Warning: Could not import functional module")
+
 
 _pil_interpolation_to_str = {
     Image.NEAREST: "PIL.Image.NEAREST",

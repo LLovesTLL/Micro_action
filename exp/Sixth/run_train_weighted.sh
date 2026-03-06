@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# VideoMambaPro Finetuning Script for Micro-action (Experiment 5 - No Augmentation)
+# VideoMambaPro Finetuning Script for Micro-action (Experiment 6 - Weighted Loss + Fix Val + Import Fix)
 
 # 获取当前脚本所在目录的绝对路径
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -22,7 +22,7 @@ if [ ! -f "$PRETRAINED_WEIGHTS_PATH" ]; then
     PRETRAINED_WEIGHTS_PATH="../videomambapro/pretrained_models/Tiny_checkpoint.pth"
 fi
 
-echo "Starting training (Exp 5 - No Aug)..."
+echo "Starting training (Exp 6 - Weighted Loss)..."
 echo "Project Root: $PROJECT_ROOT"
 echo "Weights: $PRETRAINED_WEIGHTS_PATH"
 echo "Output Dir: $SCRIPT_DIR"
@@ -58,13 +58,15 @@ torchrun --nproc_per_node=4 run_class_finetuning.py \
     --sampling_rate 2 \
     --num_workers 4 \
     --opt adamw \
-    --lr 5e-4 \
+    --lr 1e-4 \
+    --num_sample 1 \
     --drop_path 0.1 \
     --fc_drop_rate 0.0 \
     --layer_decay 0.8 \
     --opt_betas 0.9 0.999 \
     --warmup_epochs 2 \
     --epochs 30 \
+    --smoothing 0.0 \
     --mixup 0.0 \
     --cutmix 0.0 \
     --color_jitter 0.0 \

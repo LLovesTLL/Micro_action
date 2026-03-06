@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import numpy as np
+import math
 import time
 import torch
 import torch.nn as nn
@@ -515,13 +516,16 @@ def main(args, ds_init):
                 
                 # 如果 checkpoint 是 2D (C_out, C_in, H, W) 而模型是 3D (C_out, C_in, T, H, W)
                 if len(weight_2d.shape) == 4 and len(weight_3d_target_shape) == 5:
-                    print(f"Inflating patch_embed.proj.weight from {weight_2d.shape} to {weight_3d_target_shape} using Mean Inflation")
+                    print(f"Inflating patch_embed.proj.weight from {weight_2d.shape} to {weight_3d_target_shape} using Center Frame Inflation")
                     # 获取时间维度 T
                     time_dim = weight_3d_target_shape[2]
                     
-                    # 执行均值膨胀 (Mean Inflation)
-                    # 将 2D 权重复制到时间维度，并归一化
-                    weight_3d = weight_2d.unsqueeze(2).repeat(1, 1, time_dim, 1, 1) / time_dim
+                    # 执行中心帧膨胀 (Center Frame Inflation)
+                    # 策略：初始化全0，只在中心帧放入2D权重
+                    # 理由：保证初始化时输出与2D模型一致，数值尺度不变
+                    weight_3d = torch.zeros(weight_3d_target_shape)
+                    center_idx = time_dim // 2
+                    weight_3d[:, :, center_idx, :, :] = weight_2d
                     
                     # 更新 checkpoint
                     checkpoint_model['patch_embed.proj.weight'] = weight_3d
@@ -535,11 +539,17 @@ def main(args, ds_init):
              print("Initializing temporal_pos_embedding with trunc_normal_")
              nn.init.trunc_normal_(model.temporal_pos_embedding, std=0.02)
 
+        if 'head.weight' in checkpoint_model:
+            print("Removing head from pretrained checkpoint")
+            del checkpoint_model['head.weight']
+            del checkpoint_model['head.bias']
+
         # Warning: passing prefix=args.model_key (e.g. 'model|module') causes load_state_dict to prepend 
         # that prefix to all model keys (e.g. 'model|modulecls_token').
         # Since checkpoint keys are clean (e.g. 'cls_token'), this results in 100% mismatch.
         # We must set prefix='' to match the cleaned checkpoint keys.
-        utils.load_state_dict(model, checkpoint_model, prefix='')
+        msg = model.load_state_dict(checkpoint_model, strict=False)
+        print(msg)
 
     model.to(device)
 
@@ -629,7 +639,56 @@ def main(args, ds_init):
     elif args.smoothing > 0.:
         criterion = LabelSmoothingCrossEntropy(smoothing=args.smoothing)
     else:
-        criterion = torch.nn.CrossEntropyLoss()
+        # New Feature: Auto-calculated Weighted Loss for Long-tailed Distribution
+        print("Checking for Long-tailed Distribution adjustments...")
+        weight_tensor = None
+        try:
+            anno_path = None
+            split_char = ' '
+            # Attempt to find annotation path from dataset object
+            if hasattr(dataset_train, 'anno_path'):
+                anno_path = dataset_train.anno_path
+                split_char = dataset_train.split
+            
+            if anno_path and os.path.exists(anno_path):
+                print(f"Loading annotations from {anno_path} to calculate class weights...")
+                class_counts = {}
+                with open(anno_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line: continue
+                        parts = line.split(split_char) if split_char != ' ' else line.split()
+                        if len(parts) >= 2:
+                            try:
+                                label = int(parts[-1])
+                                class_counts[label] = class_counts.get(label, 0) + 1
+                            except ValueError:
+                                pass
+                
+                counts_list = [class_counts.get(i, 0) for i in range(args.nb_classes)]
+                total_samples = sum(counts_list)
+                
+                if total_samples > 0:
+                    weights = []
+                    for c in counts_list:
+                        count = max(c, 1) # Avoid div by zero
+                        # Strategy: Square Root Inverse Class Frequency
+                        # w_i = sqrt(Total / Count_i)
+                        # This balances between "Equal Weight" (1/n) and "Inverse Frequency" (1/n)
+                        w = math.sqrt(total_samples / count) 
+                        weights.append(w)
+                    
+                    # Normalize weights so that mean is 1.0 (keeps Loss scale stable)
+                    mean_weight = sum(weights) / len(weights)
+                    weights = [w / mean_weight for w in weights]
+                    
+                    weight_tensor = torch.FloatTensor(weights).to(device)
+                    print(f"Activated Weighted CrossEntropyLoss!")
+                    print(f"Sample Weights: Class 9 (Majority): {weights[9]:.4f}, Class 45 (Minority): {weights[45]:.4f}")
+        except Exception as e:
+            print(f"Warning: Failed to calculate class weights: {e}")
+
+        criterion = torch.nn.CrossEntropyLoss(weight=weight_tensor)
 
     print("criterion = %s" % str(criterion))
 
